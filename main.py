@@ -33,8 +33,6 @@ parser.add_argument('--batch_size', type=int, default=128,
                     help='batch size')
 parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
-parser.add_argument('--cuda', action='store_true',
-                    help='use CUDA')
 parser.add_argument('--log_interval', type=int, default=200,
                     help='report interval')
 parser.add_argument('--checkpoint', type=str, default='./peter/',
@@ -71,10 +69,7 @@ print('-' * 40 + 'ARGUMENTS' + '-' * 40)
 
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
-if torch.cuda.is_available():
-    if not args.cuda:
-        print(now_time() + 'WARNING: You have a CUDA device, so you should probably run with --cuda')
-device = torch.device('cuda' if args.cuda else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 if not os.path.exists(args.checkpoint):
     os.makedirs(args.checkpoint)
@@ -99,17 +94,19 @@ test_data = Batchify(corpus.test, word2idx, args.words, args.batch_size)
 ###############################################################################
 
 if args.use_feature:
-    src_len = 2 + train_data.feature.size(1)  # [u, i, f]
+    src_len = 3 + train_data.feature.size(1)  # [u, i, s, f] 
 else:
     src_len = 2  # [u, i]
 tgt_len = args.words + 1  # added <bos> or <eos>
 ntokens = len(corpus.word_dict)
 nuser = len(corpus.user_dict)
 nitem = len(corpus.item_dict)
+nsenti = len(corpus.senti_dict)
 pad_idx = word2idx['<pad>']
-model = PETER(args.peter_mask, src_len, tgt_len, pad_idx, nuser, nitem, ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(device)
+model = PETER(args.peter_mask, src_len, tgt_len, pad_idx, nuser, nitem, ntokens, nsenti, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(device)
 text_criterion = nn.NLLLoss(ignore_index=pad_idx)  # ignore the padding when computing loss
 rating_criterion = nn.MSELoss()
+senti_criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.25)
 
@@ -132,29 +129,30 @@ def train(data):
     model.train()
     context_loss = 0.
     text_loss = 0.
-    rating_loss = 0.
+    sentiment_loss = 0.
     total_sample = 0
     while True:
-        user, item, rating, seq, feature = data.next_batch()  # (batch_size, seq_len), data.step += 1
+        user, item, rating, seq, feature, senti = data.next_batch()  # (batch_size, seq_len), data.step += 1
         batch_size = user.size(0)
         user = user.to(device)  # (batch_size,)
         item = item.to(device)
+        senti = senti.to(device)  # (batch_size,)
         rating = rating.to(device)
         seq = seq.t().to(device)  # (tgt_len + 1, batch_size)
         feature = feature.t().to(device)  # (1, batch_size)
         if args.use_feature:
-            text = torch.cat([feature, seq[:-1]], 0)  # (src_len + tgt_len - 2, batch_size)
+            text = torch.cat([feature, seq[:-1]], 0)  # (src_len + tgt_len - 2, batch_size) 
         else:
             text = seq[:-1]  # (src_len + tgt_len - 2, batch_size)
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         optimizer.zero_grad()
-        log_word_prob, log_context_dis, rating_p, _ = model(user, item, text)  # (tgt_len, batch_size, ntoken) vs. (batch_size, ntoken) vs. (batch_size,)
+        log_word_prob, log_context_dis, pred_senti, _ = model(user, item, senti, text)  # (tgt_len, batch_size, ntoken) vs. (batch_size, ntoken) vs. (batch_size,)
         context_dis = log_context_dis.unsqueeze(0).repeat((tgt_len - 1, 1, 1))  # (batch_size, ntoken) -> (tgt_len - 1, batch_size, ntoken)
         c_loss = text_criterion(context_dis.view(-1, ntokens), seq[1:-1].reshape((-1,)))
-        r_loss = rating_criterion(rating_p, rating)
+        s_loss = senti_criterion(pred_senti, senti)
         t_loss = text_criterion(log_word_prob.view(-1, ntokens), seq[1:].reshape((-1,)))
-        loss = args.text_reg * t_loss + args.context_reg * c_loss + args.rating_reg * r_loss
+        loss = args.text_reg * t_loss + args.context_reg * c_loss + args.rating_reg * s_loss
         loss.backward()
 
         # `clip_grad_norm` helps prevent the exploding gradient problem.
@@ -163,18 +161,18 @@ def train(data):
 
         context_loss += batch_size * c_loss.item()
         text_loss += batch_size * t_loss.item()
-        rating_loss += batch_size * r_loss.item()
+        sentiment_loss += batch_size * s_loss.item()
         total_sample += batch_size
 
         if data.step % args.log_interval == 0 or data.step == data.total_step:
             cur_c_loss = context_loss / total_sample
             cur_t_loss = text_loss / total_sample
-            cur_r_loss = rating_loss / total_sample
-            print(now_time() + 'context ppl {:4.4f} | text ppl {:4.4f} | rating loss {:4.4f} | {:5d}/{:5d} batches'.format(
-                math.exp(cur_c_loss), math.exp(cur_t_loss), cur_r_loss, data.step, data.total_step))
+            cur_s_loss = sentiment_loss / total_sample
+            print(now_time() + 'context ppl {:4.4f} | text ppl {:4.4f} | sentiment loss {:4.4f} | {:5d}/{:5d} batches'.format(
+                math.exp(cur_c_loss), math.exp(cur_t_loss), cur_s_loss, data.step, data.total_step))
             context_loss = 0.
             text_loss = 0.
-            rating_loss = 0.
+            sentiment_loss = 0.
             total_sample = 0
         if data.step == data.total_step:
             break
@@ -185,14 +183,15 @@ def evaluate(data):
     model.eval()
     context_loss = 0.
     text_loss = 0.
-    rating_loss = 0.
+    sentiment_loss = 0.
     total_sample = 0
     with torch.no_grad():
         while True:
-            user, item, rating, seq, feature = data.next_batch()  # (batch_size, seq_len), data.step += 1
+            user, item, rating, seq, feature, senti = data.next_batch()  # (batch_size, seq_len), data.step += 1
             batch_size = user.size(0)
             user = user.to(device)  # (batch_size,)
             item = item.to(device)
+            senti = senti.to(device)
             rating = rating.to(device)
             seq = seq.t().to(device)  # (tgt_len + 1, batch_size)
             feature = feature.t().to(device)  # (1, batch_size)
@@ -200,20 +199,20 @@ def evaluate(data):
                 text = torch.cat([feature, seq[:-1]], 0)  # (src_len + tgt_len - 2, batch_size)
             else:
                 text = seq[:-1]  # (src_len + tgt_len - 2, batch_size)
-            log_word_prob, log_context_dis, rating_p, _ = model(user, item, text)  # (tgt_len, batch_size, ntoken) vs. (batch_size, ntoken) vs. (batch_size,)
+            log_word_prob, log_context_dis, pred_senti, _ = model(user, item, senti, text)  # (tgt_len, batch_size, ntoken) vs. (batch_size, ntoken) vs. (batch_size,)
             context_dis = log_context_dis.unsqueeze(0).repeat((tgt_len - 1, 1, 1))  # (batch_size, ntoken) -> (tgt_len - 1, batch_size, ntoken)
             c_loss = text_criterion(context_dis.view(-1, ntokens), seq[1:-1].reshape((-1,)))
-            r_loss = rating_criterion(rating_p, rating)
+            s_loss = senti_criterion(pred_senti, senti)
             t_loss = text_criterion(log_word_prob.view(-1, ntokens), seq[1:].reshape((-1,)))
 
             context_loss += batch_size * c_loss.item()
             text_loss += batch_size * t_loss.item()
-            rating_loss += batch_size * r_loss.item()
+            sentiment_loss += batch_size * s_loss.item()
             total_sample += batch_size
 
             if data.step == data.total_step:
                 break
-    return context_loss / total_sample, text_loss / total_sample, rating_loss / total_sample
+    return context_loss / total_sample, text_loss / total_sample, sentiment_loss / total_sample
 
 
 def generate(data):
@@ -224,9 +223,10 @@ def generate(data):
     rating_predict = []
     with torch.no_grad():
         while True:
-            user, item, rating, seq, feature = data.next_batch()
+            user, item, rating, seq, feature, senti = data.next_batch()
             user = user.to(device)  # (batch_size,)
             item = item.to(device)
+            senti = senti.to(device)
             bos = seq[:, 0].unsqueeze(0).to(device)  # (1, batch_size)
             feature = feature.t().to(device)  # (1, batch_size)
             if args.use_feature:
@@ -237,12 +237,12 @@ def generate(data):
             for idx in range(args.words):
                 # produce a word at each step
                 if idx == 0:
-                    log_word_prob, log_context_dis, rating_p, _ = model(user, item, text, False)  # (batch_size, ntoken) vs. (batch_size, ntoken) vs. (batch_size,)
-                    rating_predict.extend(rating_p.tolist())
+                    log_word_prob, log_context_dis, pred_senti, _ = model(user, item, senti, text, False)  # (batch_size, ntoken) vs. (batch_size, ntoken) vs. (batch_size,)
+                    # rating_predict.extend(rating_p.tolist())
                     context = predict(log_context_dis, topk=args.words)  # (batch_size, words)
                     context_predict.extend(context.tolist())
                 else:
-                    log_word_prob, _, _, _ = model(user, item, text, False, False, False)  # (batch_size, ntoken)
+                    log_word_prob, _, _, _ = model(user, item, senti, text, False, False, False)  # (batch_size, ntoken)
                 word_prob = log_word_prob.exp()  # (batch_size, ntoken)
                 word_idx = torch.argmax(word_prob, dim=1)  # (batch_size,), pick the one with the largest probability
                 text = torch.cat([text, word_idx.unsqueeze(0)], 0)  # (len++, batch_size)
@@ -253,11 +253,11 @@ def generate(data):
                 break
 
     # rating
-    predicted_rating = [(r, p) for (r, p) in zip(data.rating.tolist(), rating_predict)]
-    RMSE = root_mean_square_error(predicted_rating, corpus.max_rating, corpus.min_rating)
-    print(now_time() + 'RMSE {:7.4f}'.format(RMSE))
-    MAE = mean_absolute_error(predicted_rating, corpus.max_rating, corpus.min_rating)
-    print(now_time() + 'MAE {:7.4f}'.format(MAE))
+    # predicted_rating = [(r, p) for (r, p) in zip(data.rating.tolist(), rating_predict)]
+    # RMSE = root_mean_square_error(predicted_rating, corpus.max_rating, corpus.min_rating)
+    # print(now_time() + 'RMSE {:7.4f}'.format(RMSE))
+    # MAE = mean_absolute_error(predicted_rating, corpus.max_rating, corpus.min_rating)
+    # print(now_time() + 'MAE {:7.4f}'.format(MAE))
     # text
     tokens_test = [ids2tokens(ids[1:], word2idx, idx2word) for ids in data.seq.tolist()]
     tokens_predict = [ids2tokens(ids, word2idx, idx2word) for ids in idss_predict]
@@ -297,7 +297,7 @@ for epoch in range(1, args.epochs + 1):
     if args.rating_reg == 0:
         val_loss = val_t_loss
     else:
-        val_loss = val_t_loss + val_r_loss
+        val_loss = val_t_loss #+ val_r_loss
     print(now_time() + 'context ppl {:4.4f} | text ppl {:4.4f} | rating loss {:4.4f} | valid loss {:4.4f} on validation'.format(
         math.exp(val_c_loss), math.exp(val_t_loss), val_r_loss, val_loss))
     # Save the model if the validation loss is the best we've seen so far.

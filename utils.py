@@ -169,6 +169,7 @@ class DataLoader:
         self.word_dict = WordDictionary()
         self.user_dict = EntityDictionary()
         self.item_dict = EntityDictionary()
+        self.senti_dict = EntityDictionary()
         self.max_rating = float('-inf')
         self.min_rating = float('inf')
         self.initialize(data_path)
@@ -184,6 +185,7 @@ class DataLoader:
             self.user_dict.add_entity(review['user'])
             self.item_dict.add_entity(review['item'])
             (fea, adj, tem, sco) = review['template']
+            self.senti_dict.add_entity(sco)
             self.word_dict.add_sentence(tem)
             self.word_dict.add_word(fea)
             rating = review['rating']
@@ -199,6 +201,7 @@ class DataLoader:
             (fea, adj, tem, sco) = review['template']
             data.append({'user': self.user_dict.entity2idx[review['user']],
                          'item': self.item_dict.entity2idx[review['item']],
+                         'sentiment': self.senti_dict.entity2idx[sco],
                          'rating': review['rating'],
                          'text': self.seq2ids(tem),
                          'feature': self.word_dict.word2idx.get(fea, self.__unk)})
@@ -244,16 +247,18 @@ class Batchify:
         bos = word2idx['<bos>']
         eos = word2idx['<eos>']
         pad = word2idx['<pad>']
-        u, i, r, t, f = [], [], [], [], []
+        u, i, r, t, f, s = [], [], [], [], [], []
         for x in data:
             u.append(x['user'])
             i.append(x['item'])
             r.append(x['rating'])
             t.append(sentence_format(x['text'], seq_len, pad, bos, eos))
             f.append([x['feature']])
+            s.append(x['sentiment'])
 
         self.user = torch.tensor(u, dtype=torch.int64).contiguous()
         self.item = torch.tensor(i, dtype=torch.int64).contiguous()
+        self.senti = torch.tensor(s, dtype=torch.int64).contiguous()
         self.rating = torch.tensor(r, dtype=torch.float).contiguous()
         self.seq = torch.tensor(t, dtype=torch.int64).contiguous()
         self.feature = torch.tensor(f, dtype=torch.int64).contiguous()
@@ -276,10 +281,11 @@ class Batchify:
         index = self.index_list[start:offset]
         user = self.user[index]  # (batch_size,)
         item = self.item[index]
+        senti = self.senti[index]
         rating = self.rating[index]
         seq = self.seq[index]  # (batch_size, seq_len)
         feature = self.feature[index]  # (batch_size, 1)
-        return user, item, rating, seq, feature
+        return user, item, rating, seq, feature, senti
 
 
 def now_time():

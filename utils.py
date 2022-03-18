@@ -70,9 +70,11 @@ def feature_detect(seq_batch, feature_set):
 
 
 def feature_matching_ratio(feature_batch, test_feature):
+    # print("feature_batch, test_feature", feature_batch, test_feature)
     count = 0
     for (fea_set, fea) in zip(feature_batch, test_feature):
-        if fea in fea_set:
+        feat = set(fea)
+        if feat.intersection(fea_set):
             count += 1
 
     return count / len(feature_batch)
@@ -187,7 +189,7 @@ class DataLoader:
             (fea, adj, tem, sco) = review['template']
             self.senti_dict.add_entity(sco)
             self.word_dict.add_sentence(tem)
-            self.word_dict.add_word(fea)
+            self.word_dict.add_sentence(fea)
             rating = review['rating']
             if self.max_rating < rating:
                 self.max_rating = rating
@@ -204,8 +206,8 @@ class DataLoader:
                          'sentiment': self.senti_dict.entity2idx[sco],
                          'rating': review['rating'],
                          'text': self.seq2ids(tem),
-                         'feature': self.word_dict.word2idx.get(fea, self.__unk)})
-            if fea in self.word_dict.word2idx:
+                         'feature': self.seq2ids(fea)})
+            if fea in self.word_dict.word2idx:  # TODO
                 self.feature_set.add(fea)
             else:
                 self.feature_set.add('<unk>')
@@ -234,16 +236,22 @@ class DataLoader:
         return train_index, valid_index, test_index
 
 
-def sentence_format(sentence, max_len, pad, bos, eos):
+def sentence_format(sentence, max_len, pad, bos, eos, feat=False):
     length = len(sentence)
     if length >= max_len:
-        return [bos] + sentence[:max_len] + [eos]
+        if feat:
+            return sentence[:max_len]
+        else:
+            return [bos] + sentence[:max_len] + [eos]
     else:
-        return [bos] + sentence + [eos] + [pad] * (max_len - length)
+        if feat:
+            return sentence + [pad] * (max_len - length)
+        else:
+            return [bos] + sentence + [eos] + [pad] * (max_len - length)
 
 
 class Batchify:
-    def __init__(self, data, word2idx, seq_len=15, batch_size=128, shuffle=False):
+    def __init__(self, data, word2idx, seq_len=15, batch_size=128, shuffle=False, feat_len=5):
         bos = word2idx['<bos>']
         eos = word2idx['<eos>']
         pad = word2idx['<pad>']
@@ -253,7 +261,7 @@ class Batchify:
             i.append(x['item'])
             r.append(x['rating'])
             t.append(sentence_format(x['text'], seq_len, pad, bos, eos))
-            f.append([x['feature']])
+            f.append(sentence_format(x['feature'], feat_len, pad, None, None, feat=True))
             s.append(x['sentiment'])
 
         self.user = torch.tensor(u, dtype=torch.int64).contiguous()

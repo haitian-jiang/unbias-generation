@@ -272,7 +272,8 @@ def generate(data):
     print(now_time() + 'DIV {:7.4f}'.format(DIV))
     FCR = feature_coverage_ratio(feature_batch, feature_set)
     print(now_time() + 'FCR {:7.4f}'.format(FCR))
-    feature_test = [idx2word[i] for i in data.feature.squeeze(1).tolist()]  # ids to words
+    feature_test = [ids2tokens(ids, word2idx, idx2word) for ids in data.feature.tolist()]
+    # feature_test = [idx2word[i] for i in data.feature.squeeze(1).tolist()]  # ids to words
     FMR = feature_matching_ratio(feature_batch, feature_test)
     print(now_time() + 'FMR {:7.4f}'.format(FMR))
     text_test = [' '.join(tokens) for tokens in tokens_test]

@@ -1,3 +1,6 @@
 __pycache__/
 out-*/
 *.log
+.DS_Store
+.ipynb_checkpoints/
+ABSA/

@@ -211,11 +211,15 @@ def generate_peter_mask(src_len, tgt_len):
     total_len = src_len + tgt_len
     mask = generate_square_subsequent_mask(total_len)
     mask[0, 1] = False  # allow to attend for user and item
+    # jht mask
+    mask[0, 2], mask[0, 3] = False # let u attend senti and aspect
+    mask[1, 2], mask[1, 3] = False # let i attend senti and aspect
+    mask[2, 3] = False # let aspect attend senti
     return mask
 
 
 class PETER(nn.Module):
-    def __init__(self, peter_mask, src_len, tgt_len, pad_idx, nuser, nitem, ntoken, nsenti, emsize, nhead, nhid, nlayers, dropout=0.5):
+    def __init__(self, peter_mask, src_len, tgt_len, pad_idx, nuser, nitem, ntoken, nsenti, naspect, emsize, nhead, nhid, nlayers, dropout=0.5):
         super(PETER, self).__init__()
         self.pos_encoder = PositionalEncoding(emsize, dropout)  # emsize: word embedding size
         encoder_layers = TransformerEncoderLayer(emsize, nhead, nhid, dropout)  # nhid: dim_feedforward, one basic layer, including multi-head attention and FFN
@@ -223,10 +227,11 @@ class PETER(nn.Module):
         self.user_embeddings = nn.Embedding(nuser, emsize)
         self.item_embeddings = nn.Embedding(nitem, emsize)
         self.senti_embeddings = nn.Embedding(nsenti, emsize)
+        self.aspect_embeddings = nn.Embedding(naspect, emsize)
         self.word_embeddings = nn.Embedding(ntoken, emsize)
         self.hidden2token = nn.Linear(emsize, ntoken)
-        self.recommender = MLP(emsize)
-        self.senti_pred = MLP(nsenti, emsize)
+        # self.recommender = MLP(emsize)
+        # self.senti_pred = MLP(nsenti, emsize)
 
         self.ui_len = 2
         self.src_len = src_len
@@ -244,6 +249,7 @@ class PETER(nn.Module):
         self.user_embeddings.weight.data.uniform_(-initrange, initrange)
         self.item_embeddings.weight.data.uniform_(-initrange, initrange)
         self.senti_embeddings.weight.data.uniform_(-initrange, initrange)
+        self.aspect_embeddings.weight.data.uniform_(-initrange, initrange)
         self.word_embeddings.weight.data.uniform_(-initrange, initrange)
         self.hidden2token.weight.data.uniform_(-initrange, initrange)
         self.hidden2token.bias.data.zero_()
@@ -253,9 +259,9 @@ class PETER(nn.Module):
         log_context_dis = func.log_softmax(context_prob, dim=-1)
         return log_context_dis
 
-    def predict_sentiment(self, hidden):
-        sentiment = self.senti_pred(hidden[-1])  # (batch_size, ntoken)
-        return sentiment
+    # def predict_sentiment(self, hidden):
+    #     sentiment = self.senti_pred(hidden[-1])  # (batch_size, ntoken)
+    #     return sentiment
 
     def predict_rating(self, hidden):
         rating = self.recommender(hidden[0])  # (batch_size,)
@@ -271,7 +277,7 @@ class PETER(nn.Module):
         log_word_prob = func.log_softmax(word_prob, dim=-1)
         return log_word_prob
 
-    def forward(self, user, item, senti, text, seq_prediction=True, context_prediction=True, senti_prediction=True):
+    def forward(self, user, item, senti, aspect, text, seq_prediction=True, context_prediction=True):
         '''
         :param user: (batch_size,), torch.int64
         :param item: (batch_size,), torch.int64
@@ -286,25 +292,23 @@ class PETER(nn.Module):
         '''
         device = user.device
         batch_size = user.size(0)
-        total_len = self.ui_len + text.size(0) + 1  # deal with generation when total_len != src_len + tgt_len, +1 for sentiment
+        # total_len = self.ui_len + text.size(0) + 1  # deal with generation when total_len != src_len + tgt_len, +1 for sentiment
+        total_len = self.src_len + text.size(0)
         # see nn.MultiheadAttention for attn_mask and key_padding_mask
         attn_mask = self.attn_mask[:total_len, :total_len].to(device)  # (total_len, total_len)
-        left = torch.zeros(batch_size, self.ui_len + 1).bool().to(device)  # (batch_size, ui_len)
-        right = text.t() == self.pad_idx  # replace pad_idx with True and others with False, (batch_size, total_len - ui_len)
+        left = torch.zeros(batch_size, self.src_len).bool().to(device)  # (batch_size, src_len)
+        right = text.t() == self.pad_idx  # replace pad_idx with True and others with False, (batch_size, total_len - src_len)
         key_padding_mask = torch.cat([left, right], 1)  # (batch_size, total_len)
 
         u_src = self.user_embeddings(user.unsqueeze(0))  # (1, batch_size, emsize)
         i_src = self.item_embeddings(item.unsqueeze(0))  # (1, batch_size, emsize)
         s_src = self.senti_embeddings(senti.unsqueeze(0))
+        a_src = self.aspect_embeddings(aspect.unsqueeze(0))
         w_src = self.word_embeddings(text)  # (total_len - ui_len, batch_size, emsize)
-        src = torch.cat([u_src, i_src, s_src, w_src], 0)  # (total_len, batch_size, emsize)
+        src = torch.cat([u_src, i_src, a_src, s_src, w_src], 0)  # (total_len, batch_size, emsize)
         src = src * math.sqrt(self.emsize)
         src = self.pos_encoder(src)
         hidden, attns = self.transformer_encoder(src, attn_mask, key_padding_mask)  # (total_len, batch_size, emsize) vs. (nlayers, batch_size, total_len_tgt, total_len_src)
-        if senti_prediction:
-            sentiment = self.predict_sentiment(hidden)  # (batch_size,)
-        else:
-            sentiment = None
         if context_prediction:
             log_context_dis = self.predict_context(hidden)  # (batch_size, ntoken)
         else:
@@ -313,4 +317,4 @@ class PETER(nn.Module):
             log_word_prob = self.predict_seq(hidden)  # (tgt_len, batch_size, ntoken)
         else:
             log_word_prob = self.generate_token(hidden)  # (batch_size, ntoken)
-        return log_word_prob, log_context_dis, sentiment, attns
+        return log_word_prob, log_context_dis, attns

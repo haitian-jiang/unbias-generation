@@ -172,45 +172,57 @@ class DataLoader:
         self.user_dict = EntityDictionary()
         self.item_dict = EntityDictionary()
         self.senti_dict = EntityDictionary()
+        self.aspect_dict = EntityDictionary()
         self.max_rating = float('-inf')
         self.min_rating = float('inf')
         self.initialize(data_path)
         self.word_dict.keep_most_frequent(vocab_size)
         self.__unk = self.word_dict.word2idx['<unk>']
-        self.feature_set = set()
+        # self.feature_set = set()
         self.train, self.valid, self.test = self.load_data(data_path, index_dir)
+
+    def load_json(self, data_path):
+        import json
+        reviews = []
+        with open(data_path, "r") as f:
+            for line in f:
+                reviews.append(json.loads(line))
+        return reviews
 
     def initialize(self, data_path):
         assert os.path.exists(data_path)
-        reviews = pickle.load(open(data_path, 'rb'))
+        reviews = self.load_json(data_path)
         for review in reviews:
             self.user_dict.add_entity(review['user'])
             self.item_dict.add_entity(review['item'])
-            (fea, adj, tem, sco) = review['template']
-            self.senti_dict.add_entity(sco)
-            self.word_dict.add_sentence(tem)
-            self.word_dict.add_sentence(fea)
+            self.senti_dict.add_entity(review['sentiment'])
+            self.word_dict.add_sentence(' '.join(review['relevant_tokens']))
+            self.aspect_dict.entity2idx[review['aspect_cluster']] = int(review['aspect_cluster_id'])
             rating = review['rating']
             if self.max_rating < rating:
                 self.max_rating = rating
             if self.min_rating > rating:
                 self.min_rating = rating
+        self.aspect_dict.idx2entity = [None] * len(self.aspect_dict.entity2idx)
+        for entity, idx in self.aspect_dict.entity2idx.items():
+            self.aspect_dict.idx2entity[idx] = entity
 
-    def load_data(self, data_path, index_dir):
+    def load_data(self, data_path, index_dir=None):
         data = []
-        reviews = pickle.load(open(data_path, 'rb'))
+        reviews = self.load_json(data_path)
         for review in reviews:
-            (fea, adj, tem, sco) = review['template']
+            # (fea, adj, tem, sco) = review['template']
             data.append({'user': self.user_dict.entity2idx[review['user']],
                          'item': self.item_dict.entity2idx[review['item']],
-                         'sentiment': self.senti_dict.entity2idx[sco],
+                         'sentiment': self.senti_dict.entity2idx[review['sentiment']],
                          'rating': review['rating'],
-                         'text': self.seq2ids(tem),
-                         'feature': self.seq2ids(fea)})
-            if fea in self.word_dict.word2idx:  # TODO
-                self.feature_set.add(fea)
-            else:
-                self.feature_set.add('<unk>')
+                         'text': self.seq2ids(' '.join(review['relevant_tokens'])),
+                         'aspect': int(review['aspect_cluster_id']),
+                        })
+            # if fea in self.word_dict.word2idx:  
+            #     self.feature_set.add(fea)
+            # else:
+            #     self.feature_set.add('<unk>')
 
         train_index, valid_index, test_index = self.load_index(index_dir)
         train, valid, test = [], [], []
@@ -255,13 +267,14 @@ class Batchify:
         bos = word2idx['<bos>']
         eos = word2idx['<eos>']
         pad = word2idx['<pad>']
-        u, i, r, t, f, s = [], [], [], [], [], []
+        u, i, r, t, a, s = [], [], [], [], [], []
         for x in data:
             u.append(x['user'])
             i.append(x['item'])
             r.append(x['rating'])
             t.append(sentence_format(x['text'], seq_len, pad, bos, eos))
-            f.append(sentence_format(x['feature'], feat_len, pad, None, None, feat=True))
+            # f.append(sentence_format(x['feature'], feat_len, pad, None, None, feat=True))
+            a.append(x['aspect'])
             s.append(x['sentiment'])
 
         self.user = torch.tensor(u, dtype=torch.int64).contiguous()
@@ -269,7 +282,7 @@ class Batchify:
         self.senti = torch.tensor(s, dtype=torch.int64).contiguous()
         self.rating = torch.tensor(r, dtype=torch.float).contiguous()
         self.seq = torch.tensor(t, dtype=torch.int64).contiguous()
-        self.feature = torch.tensor(f, dtype=torch.int64).contiguous()
+        self.aspect = torch.tensor(a, dtype=torch.int64).contiguous()
         self.shuffle = shuffle
         self.batch_size = batch_size
         self.sample_num = len(data)
@@ -292,8 +305,8 @@ class Batchify:
         senti = self.senti[index]
         rating = self.rating[index]
         seq = self.seq[index]  # (batch_size, seq_len)
-        feature = self.feature[index]  # (batch_size, 1)
-        return user, item, rating, seq, feature, senti
+        aspect = self.aspect[index]  # (batch_size, 1)
+        return user, item, rating, seq, aspect, senti
 
 
 def now_time():

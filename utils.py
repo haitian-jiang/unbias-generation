@@ -139,7 +139,7 @@ class WordDictionary:
             self.word2idx[w] = len(self.idx2word)
             self.idx2word.append(w)
             self.__word2count[w] = 1
-        else:
+        elif w != '<unk>':  # in case <unk> appear in dataset
             self.__word2count[w] += 1
 
     def __len__(self):
@@ -194,7 +194,7 @@ class DataLoader:
         if load_json:
             reviews = self.load_json(data_path)
         else:
-            reviews = pickle.load(open(data_path, 'rb'))
+            reviews = torch.load(data_path)
         for review in reviews:
             self.user_dict.add_entity(review['user'])
             self.item_dict.add_entity(review['item'])
@@ -215,7 +215,7 @@ class DataLoader:
         if load_json:
             reviews = self.load_json(data_path)
         else:
-            reviews = pickle.load(open(data_path, 'rb'))
+            reviews = torch.load(data_path)
         for review in reviews:
             # (fea, adj, tem, sco) = review['template']
             data.append({'user': self.user_dict.entity2idx[review['user']],

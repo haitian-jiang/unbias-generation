@@ -167,7 +167,7 @@ class EntityDictionary:
 
 
 class DataLoader:
-    def __init__(self, data_path, index_dir, vocab_size):
+    def __init__(self, data_path, index_dir, vocab_size, load_json=True):
         self.word_dict = WordDictionary()
         self.user_dict = EntityDictionary()
         self.item_dict = EntityDictionary()
@@ -175,11 +175,11 @@ class DataLoader:
         self.aspect_dict = EntityDictionary()
         self.max_rating = float('-inf')
         self.min_rating = float('inf')
-        self.initialize(data_path)
+        self.initialize(data_path, load_json)
         self.word_dict.keep_most_frequent(vocab_size)
         self.__unk = self.word_dict.word2idx['<unk>']
         # self.feature_set = set()
-        self.train, self.valid, self.test = self.load_data(data_path, index_dir)
+        self.train, self.valid, self.test = self.load_data(data_path, index_dir, load_json)
 
     def load_json(self, data_path):
         import json
@@ -189,9 +189,12 @@ class DataLoader:
                 reviews.append(json.loads(line))
         return reviews
 
-    def initialize(self, data_path):
+    def initialize(self, data_path, load_json):
         assert os.path.exists(data_path)
-        reviews = self.load_json(data_path)
+        if load_json:
+            reviews = self.load_json(data_path)
+        else:
+            reviews = pickle.load(open(data_path, 'rb'))
         for review in reviews:
             self.user_dict.add_entity(review['user'])
             self.item_dict.add_entity(review['item'])
@@ -207,9 +210,12 @@ class DataLoader:
         for entity, idx in self.aspect_dict.entity2idx.items():
             self.aspect_dict.idx2entity[idx] = entity
 
-    def load_data(self, data_path, index_dir=None):
+    def load_data(self, data_path, index_dir=None, load_json=True):
         data = []
-        reviews = self.load_json(data_path)
+        if load_json:
+            reviews = self.load_json(data_path)
+        else:
+            reviews = pickle.load(open(data_path, 'rb'))
         for review in reviews:
             # (fea, adj, tem, sco) = review['template']
             data.append({'user': self.user_dict.entity2idx[review['user']],

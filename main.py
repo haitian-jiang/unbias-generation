@@ -82,6 +82,7 @@ prediction_path = os.path.join(args.checkpoint, args.outf)
 
 print(now_time() + 'Loading data')
 corpus = DataLoader(args.data_path, args.index_dir, args.vocab_size)
+torch.save({'word':corpus.word_dict, 'aspect_cluster': corpus.aspect_dict, 'sentiment': corpus.senti_dict}, os.path.join(args.checkpoint, 'dataloader.pt'))
 word2idx = corpus.word_dict.word2idx
 idx2word = corpus.word_dict.idx2word
 # feature_set = corpus.feature_set

@@ -1,5 +1,7 @@
 import math
 import copy
+from turtle import forward
+from unittest import TestCase
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
@@ -318,3 +320,29 @@ class PETER(nn.Module):
         else:
             log_word_prob = self.generate_token(hidden)  # (batch_size, ntoken)
         return log_word_prob, log_context_dis, attns
+
+
+class BasicDiscriminator(nn.Module):
+    def __init__(self, pad_idx, word_embeddings, nanchor, anchor_embeddings=None, dropout=0.2, nhead=8, nhid=2048, nlayers=6) -> None:
+        super().__init__()
+        self.word_embeddings = word_embeddings
+        self.emsize = word_embeddings.embedding_dim
+
+        if anchor_embeddings is not None:
+            self.anchor_embeddings = anchor_embeddings
+        else:
+            self.anchor_embeddings = nn.Embedding(nanchor, self.emsize)
+
+        self.pos_encoder = PositionalEncoding(self.emsize, dropout)  # emsize: word embedding size
+        encoder_layers = TransformerEncoderLayer(self.emsize, nhead, nhid, dropout)  # nhid: dim_feedforward, one basic layer, including multi-head attention and FFN
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)  # loop over the one above
+        self.pad_idx = pad_idx
+        
+    def forward(self, text, anchor=None):
+        key_padding_mask = text.t() == self.pad_idx
+        w_src = self.word_embeddings(text)  # (total_len - ui_len, batch_size, emsize)
+        a_src = self.anchor_embeddings(anchor) if anchor is not None else None
+        src = w_src * math.sqrt(self.emsize)
+        src = self.pos_encoder(src)
+        hidden, _ = self.transformer_encoder(src, None, key_padding_mask)  # (total_len, batch_size, emsize) vs. (nlayers, batch_size, total_len_tgt, total_len_src)
+        return hidden[0], a_src  # (batch_size, emsize)

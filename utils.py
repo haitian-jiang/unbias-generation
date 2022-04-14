@@ -200,7 +200,7 @@ class DataLoader:
             self.item_dict.add_entity(review['item'])
             self.senti_dict.add_entity(review['sentiment'])
             self.word_dict.add_sentence(' '.join(review['relevant_tokens']))
-            self.aspect_dict.entity2idx[review['aspect_cluster']] = int(review['aspect_cluster_id'])
+            self.aspect_dict.add_entity(review['aspect_cluster'])
             rating = review['rating']
             if self.max_rating < rating:
                 self.max_rating = rating
@@ -223,7 +223,7 @@ class DataLoader:
                          'sentiment': self.senti_dict.entity2idx[review['sentiment']],
                          'rating': review['rating'],
                          'text': self.seq2ids(' '.join(review['relevant_tokens'])),
-                         'aspect': int(review['aspect_cluster_id']),
+                         'aspect': self.aspect_dict.entity2idx[review['aspect_cluster']],
                         })
             # if fea in self.word_dict.word2idx:  
             #     self.feature_set.add(fea)

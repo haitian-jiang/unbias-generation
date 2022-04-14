@@ -12,7 +12,7 @@ from utils import now_time, sentence_format
 
 class DataLoader:
     def __init__(self, sentence_dir, anchor_path, index_dir, dictidx_table, anchor_type='aspect_cluster'):
-        # validation, then test from generation
+        # (validation, test) from generation
         assert anchor_type == 'aspect_cluster' or anchor_type == 'sentiment'
         self.word_dict = dictidx_table['word']
         self.__unk = self.word_dict.word2idx['<unk>']
@@ -115,10 +115,14 @@ def parse_arg():
     parser.add_argument('--index_dir', type=str, help='xx/stage1/')
     parser.add_argument('--anchor_type', type=str, default='aspect_cluster')
     parser.add_argument('--lr', type=float, default=1.0)
+    parser.add_argument('--nhead', type=int, default=8)
+    parser.add_argument('--nlayer', type=int, default=6)
     parser.add_argument('--epochs', type=int, default=100, help='upper epoch limit')
     parser.add_argument('--log_interval', type=int, default=200)
     parser.add_argument('--clip', type=float, default=1.0, help='gradient clipping')
     parser.add_argument('--endure_times', type=int, default=5)
+    parser.add_argument('--seed', type=int, default=1111, help='random seed')
+    parser.add_argument('--margin', type=int, default=1, help='ranking loss margin')
     return parser.parse_args()
 
 
@@ -130,7 +134,7 @@ for arg in vars(args):
 print('-' * 40 + 'ARGUMENTS' + '-' * 40)
 
 # Set the random seed manually for reproducibility.
-torch.manual_seed(2333)
+torch.manual_seed(args.seed)
 device = torch.device('cuda')
 
 generator = torch.load(os.path.join(args.sentence_dir, 'model.pt'))
@@ -138,7 +142,7 @@ dictidx_table = torch.load(os.path.join(args.sentence_dir, 'dataloader.pt'))
 print(now_time() + 'Loading data')
 dataset = DataLoader(args.sentence_dir, args.gt_path, args.index_dir, dictidx_table, args.anchor_type)
 word2idx = dictidx_table['word'].word2idx
-train_data = Batchify(dataset.train, word2idx)
+train_data = Batchify(dataset.train, word2idx, shuffle=True)
 val_data = Batchify(dataset.valid, word2idx)
 test_data = Batchify(dataset.test, word2idx)
 
@@ -146,8 +150,8 @@ pad_idx = word2idx['<pad>']
 word_embeddings = generator.word_embeddings
 anchor_embeddings = generator.senti_embeddings if args.anchor_type == 'sentiment' else generator.aspect_embeddings
 nanchor = len(dictidx_table[args.anchor_type])
-model = BasicDiscriminator(pad_idx, word_embeddings, nanchor, anchor_embeddings).to(device)
-criterion = TripletMarginLoss()
+model = BasicDiscriminator(pad_idx, word_embeddings, nanchor, anchor_embeddings, nhead=args.nhead, nlayers=args.nlayer).to(device)
+criterion = TripletMarginLoss(args.margin)
 optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.25)
 
@@ -202,7 +206,7 @@ def evaluate(data):
 
         pos_res, neg_res = positive - anchor, negative - anchor
         pos_res, neg_res = pos_res.norm(dim=1), neg_res.norm(dim=1)
-        correct = ((pos_res - neg_res) > 0).sum()
+        correct = ((pos_res - neg_res) < 0).sum()
         total_correct += correct
         if data.step == data.total_step:
             break

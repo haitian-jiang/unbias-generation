@@ -2,12 +2,10 @@ import os
 import math
 import json
 import random
-from re import A
 import torch
 import argparse
-import torch.nn as nn
-from module import DiscriminatorRanking
-from torch.nn import TripletMarginLoss
+from model import MLPDiscriminator
+from torch.nn import BCELoss
 from utils import now_time, sentence_format
 
 class DataLoader:
@@ -106,7 +104,9 @@ class Batchify:
         anchor_gt = self.anchor_gt[index]
         sentence_gt = self.sentence_gt[index]
         sentence_gen = self.sentence_gen[index]
-        return anchor_gt, sentence_gt, sentence_gen
+        label = torch.tensor([1.]*len(sentence_gt)+[0.]*len(sentence_gen))
+        return torch.cat([anchor_gt,anchor_gt]), torch.cat([sentence_gt, sentence_gen]), label
+        
 
 def parse_arg():
     parser = argparse.ArgumentParser()
@@ -123,6 +123,7 @@ def parse_arg():
     parser.add_argument('--endure_times', type=int, default=5)
     parser.add_argument('--seed', type=int, default=1111, help='random seed')
     parser.add_argument('--margin', type=int, default=1, help='ranking loss margin')
+    parser.add_argument('--batch_size', type=int, default=128)
     return parser.parse_args()
 
 
@@ -142,32 +143,31 @@ dictidx_table = torch.load(os.path.join(args.sentence_dir, 'dataloader.pt'))
 print(now_time() + 'Loading data')
 dataset = DataLoader(args.sentence_dir, args.gt_path, args.index_dir, dictidx_table, args.anchor_type)
 word2idx = dictidx_table['word'].word2idx
-train_data = Batchify(dataset.train, word2idx, shuffle=True)
-val_data = Batchify(dataset.valid, word2idx)
-test_data = Batchify(dataset.test, word2idx)
+train_data = Batchify(dataset.train, word2idx, shuffle=True, batch_size=args.batch_size)
+val_data = Batchify(dataset.valid, word2idx, batch_size=args.batch_size)
+test_data = Batchify(dataset.test, word2idx, batch_size=args.batch_size)
 
 pad_idx = word2idx['<pad>']
 word_embeddings = generator.word_embeddings
 anchor_embeddings = generator.senti_embeddings if args.anchor_type == 'sentiment' else generator.aspect_embeddings
 nanchor = len(dictidx_table[args.anchor_type])
-model = DiscriminatorRanking(pad_idx, word_embeddings, nanchor, anchor_embeddings, nhead=args.nhead, nlayers=args.nlayer).to(device)
-criterion = TripletMarginLoss(args.margin)
+model = MLPDiscriminator(pad_idx, word_embeddings, nanchor, anchor_embeddings, nhead=args.nhead, nlayers=args.nlayer).to(device)
+criterion = BCELoss()
 optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.25)
+# scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.25)
 
 def train(data):
     model.train()
     total_loss, total_sample = 0.0, 0
     while True:
-        anchor_gt, sentence_gt, sentence_gen = data.next_batch()  # (batch_size, seq_len), data.step += 1
-        batch_size = anchor_gt.size(0)
-        anchor_gt = anchor_gt.to(device)  # (batch_size,)
-        sentence_gt = sentence_gt.t().to(device)  # (seq_len, batch_size)
-        sentence_gen = sentence_gen.t().to(device)  # (seq_len, batch_size)
+        anchor, sentence, label = data.next_batch()  # (batch_size, seq_len), data.step += 1
+        batch_size = anchor.size(0)
+        anchor = anchor.to(device)  # (batch_size,)
+        sentence = sentence.t().to(device)  # (seq_len, batch_size)
+        label = label.to(device)
         optimizer.zero_grad()
-        positive, anchor = model(sentence_gt, anchor_gt)  # (batch_size, emsize)
-        negative, _ = model(sentence_gen, None)  # (batch_size, emsize)
-        loss = criterion(anchor, positive, negative)
+        pred = model(sentence, anchor)  # (batch_size, emsize)
+        loss = criterion(pred, label)
         loss.backward()
 
         # `clip_grad_norm` helps prevent the exploding gradient problem.
@@ -181,7 +181,7 @@ def train(data):
             cur_loss = total_loss / total_sample
             print(now_time() + 'loss: {:4.4f} | {:5d}/{:5d} batches'.format(
                 cur_loss, data.step, data.total_step))
-            total_loss = 0.
+            total_loss = 0
             total_sample = 0
         if data.step == data.total_step:
             break
@@ -191,22 +191,19 @@ def evaluate(data):
     model.eval()
     total_correct, total_loss, total_sample = 0, 0, 0
     while True:
-        anchor_gt, sentence_gt, sentence_gen = data.next_batch()  # (batch_size, seq_len), data.step += 1
-        batch_size = anchor_gt.size(0)
-        anchor_gt = anchor_gt.to(device)  # (batch_size,)
-        sentence_gt = sentence_gt.t().to(device)  # (seq_len, batch_size)
-        sentence_gen = sentence_gen.t().to(device)  # (seq_len, batch_size)
+        anchor, sentence, label = data.next_batch()  # (batch_size, seq_len), data.step += 1
+        batch_size = anchor.size(0)
+        anchor = anchor.to(device)  # (batch_size,)
+        sentence = sentence.t().to(device)  # (seq_len, batch_size)
+        label = label.to(device)
         optimizer.zero_grad()
-        positive, anchor = model(sentence_gt, anchor_gt)  # (batch_size, emsize)
-        negative, _ = model(sentence_gen, None)  # (batch_size, emsize)
-        loss = criterion(anchor, positive, negative)
+        pred = model(sentence, anchor)  # (batch_size, emsize)
+        loss = criterion(pred, label)
 
         total_loss += batch_size * loss.item()
         total_sample += batch_size
 
-        pos_res, neg_res = positive - anchor, negative - anchor
-        pos_res, neg_res = pos_res.norm(dim=1), neg_res.norm(dim=1)
-        correct = ((pos_res - neg_res) < 0).sum()
+        correct = ((pred > 0.5).int() == label).sum()
         total_correct += correct
         if data.step == data.total_step:
             break
@@ -218,14 +215,14 @@ def evaluate(data):
 # Loop over epochs.
 best_val_acc = float('inf')
 endure_count = 0
-model_path = os.path.join(args.sentence_dir, f'discriminator-{args.anchor_type}.pt')
+model_path = os.path.join(args.sentence_dir, f'discriminatorMLPAdam-{args.anchor_type}.pt')
 for epoch in range(1, args.epochs + 1):
     print(now_time() + 'epoch {}'.format(epoch))
     train(train_data)
     val_acc, val_loss = evaluate(val_data)
     print(now_time() + f'Accuracy {val_acc:4.4f} | loss {val_loss:4.4f} on validation')
     # Save the model if the validation loss is the best we've seen so far.
-    if val_acc < best_val_acc:
+    if val_loss < best_val_acc:
         best_val_acc = val_loss
         with open(model_path, 'wb') as f:
             torch.save(model, f)
@@ -236,8 +233,8 @@ for epoch in range(1, args.epochs + 1):
             print(now_time() + 'Cannot endure it anymore | Exiting from early stop')
             break
         # Anneal the learning rate if no improvement has been seen in the validation dataset.
-        scheduler.step()
-        print(now_time() + 'Learning rate set to {:2.8f}'.format(scheduler.get_last_lr()[0]))
+        # scheduler.step()
+        # print(now_time() + 'Learning rate set to {:2.8f}'.format(scheduler.get_last_lr()[0]))
 
 # Load the best saved model.
 with open(model_path, 'rb') as f:

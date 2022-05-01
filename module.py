@@ -214,8 +214,8 @@ def generate_peter_mask(src_len, tgt_len):
     mask = generate_square_subsequent_mask(total_len)
     mask[0, 1] = False  # allow to attend for user and item
     # jht mask
-    mask[0, 2], mask[0, 3] = False # let u attend senti and aspect
-    mask[1, 2], mask[1, 3] = False # let i attend senti and aspect
+    mask[0, 2], mask[0, 3] = False, False # let u attend senti and aspect
+    mask[1, 2], mask[1, 3] = False, False # let i attend senti and aspect
     mask[2, 3] = False # let aspect attend senti
     return mask
 
@@ -322,7 +322,7 @@ class PETER(nn.Module):
         return log_word_prob, log_context_dis, attns
 
 
-class BasicDiscriminator(nn.Module):
+class DiscriminatorRanking(nn.Module):
     def __init__(self, pad_idx, word_embeddings, nanchor, anchor_embeddings=None, dropout=0.2, nhead=8, nhid=2048, nlayers=6) -> None:
         super().__init__()
         self.word_embeddings = word_embeddings

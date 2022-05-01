@@ -82,7 +82,9 @@ prediction_path = os.path.join(args.checkpoint, args.outf)
 
 print(now_time() + 'Loading data')
 corpus = DataLoader(args.data_path, args.index_dir, args.vocab_size)
-torch.save({'word':corpus.word_dict, 'aspect_cluster': corpus.aspect_dict, 'sentiment': corpus.senti_dict}, os.path.join(args.checkpoint, 'dataloader.pt'))
+torch.save({'word':corpus.word_dict, 'aspect_cluster': corpus.aspect_dict, 
+            'sentiment': corpus.senti_dict, 'user': corpus.user_dict, 'item': corpus.item_dict}, 
+           os.path.join(args.checkpoint, 'dataloader.pt'))
 word2idx = corpus.word_dict.word2idx
 idx2word = corpus.word_dict.idx2word
 # feature_set = corpus.feature_set
@@ -141,7 +143,7 @@ def train(data):
         # if args.use_feature:
             # text = torch.cat([aspect, seq[:-1]], 0)  # (src_len + tgt_len - 2, batch_size) 
         # else:
-        text = seq[:-1]  # (src_len + tgt_len - 2, batch_size)
+        text = seq[:-1]  # (tgt_len, batch_size)
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         optimizer.zero_grad()

@@ -167,7 +167,7 @@ class EntityDictionary:
 
 
 class DataLoader:
-    def __init__(self, data_path, index_dir, vocab_size, load_json=True):
+    def __init__(self, data_path, index_dir, vocab_size, load_json=True, pretrained=None):
         self.word_dict = WordDictionary()
         self.user_dict = EntityDictionary()
         self.item_dict = EntityDictionary()
@@ -177,8 +177,13 @@ class DataLoader:
         self.min_rating = float('inf')
         self.initialize(data_path, load_json)
         self.word_dict.keep_most_frequent(vocab_size)
+        if pretrained is not None:
+            self.word_dict = pretrained['word']
+            self.aspect_dict = pretrained['aspect_cluster']
+            self.senti_dict = pretrained['sentiment']
+            self.user_dict = pretrained['user']
+            self.item_dict = pretrained['item']
         self.__unk = self.word_dict.word2idx['<unk>']
-        # self.feature_set = set()
         self.train, self.valid, self.test = self.load_data(data_path, index_dir, load_json)
 
     def load_json(self, data_path):
@@ -206,9 +211,6 @@ class DataLoader:
                 self.max_rating = rating
             if self.min_rating > rating:
                 self.min_rating = rating
-        self.aspect_dict.idx2entity = [None] * len(self.aspect_dict.entity2idx)
-        for entity, idx in self.aspect_dict.entity2idx.items():
-            self.aspect_dict.idx2entity[idx] = entity
 
     def load_data(self, data_path, index_dir=None, load_json=True):
         data = []
@@ -217,7 +219,6 @@ class DataLoader:
         else:
             reviews = torch.load(data_path)
         for review in reviews:
-            # (fea, adj, tem, sco) = review['template']
             data.append({'user': self.user_dict.entity2idx[review['user']],
                          'item': self.item_dict.entity2idx[review['item']],
                          'sentiment': self.senti_dict.entity2idx[review['sentiment']],
@@ -225,10 +226,6 @@ class DataLoader:
                          'text': self.seq2ids(' '.join(review['relevant_tokens'])),
                          'aspect': self.aspect_dict.entity2idx[review['aspect_cluster']],
                         })
-            # if fea in self.word_dict.word2idx:  
-            #     self.feature_set.add(fea)
-            # else:
-            #     self.feature_set.add('<unk>')
 
         train_index, valid_index, test_index = self.load_index(index_dir)
         train, valid, test = [], [], []
@@ -316,7 +313,8 @@ class Batchify:
 
 
 def now_time():
-    return '[' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f') + ']: '
+    # return '[' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f') + ']: '
+    return '[' + datetime.datetime.now().strftime('%m-%d %H:%M:%S') + ']: '
 
 
 def ids2tokens(ids, word2idx, idx2word):

@@ -48,10 +48,10 @@ def parse_arg():
 
 
 def load_pretrained(args):
-    dataloader = torch.load(os.path.join(args.pretrained_path), 'dataloader.pt')
-    generator = torch.load(os.path.join(args.pretrained_path), 'model.pt')
-    aspect_discriminator = torch.load(os.path.join(args.pretrained_path), 'discriminator-aspect_cluster.pt')
-    sentiment_discriminator = torch.load(os.path.join(args.pretrained_path), 'discriminator-sentiment.pt')
+    dataloader = torch.load(os.path.join(args.pretrained_path, 'dataloader.pt'))
+    generator = torch.load(os.path.join(args.pretrained_path, 'model.pt'))
+    aspect_discriminator = torch.load(os.path.join(args.pretrained_path, 'discriminator-aspect_cluster.pt'))
+    sentiment_discriminator = torch.load(os.path.join(args.pretrained_path, 'discriminator-sentiment.pt'))
     return dataloader, generator, aspect_discriminator, sentiment_discriminator
 
 
@@ -121,7 +121,7 @@ if __name__ == '__main__':
             print(now_time() + 'Learning rate of G set to {:2.8f}'.format(gan.schedulerG.get_last_lr()[0]))
 
     with open(model_path, 'rb') as f:
-        best_model = torch.load(f).to(device)
+        best_model = torch.load(f)
 
     # Run on test data.
     best_model.evaluate(test_data, 'test')

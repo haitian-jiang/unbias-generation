@@ -199,12 +199,12 @@ class GAN(object):
         self.netG.train()
         args = self.args
         """prepare data"""
-        user, item, rating, seq, aspect, senti = batch  # (batch_size, seq_len), data.step += 1
+        user, item, _, seq, aspect, senti = batch  # (batch_size, seq_len), data.step += 1
         user = user.to(self.device)  # (batch_size,)
         item = item.to(self.device)
         senti = senti.to(self.device)  # (batch_size,)
         seq = seq.t().to(self.device)  # (tgt_len + 1, batch_size)
-        aspect = aspect.t().to(self.device)  # (1, batch_size)
+        aspect = aspect.to(self.device)  # (1, batch_size)
         text = seq[:-1]  # (tgt_len, batch_size)
             
         """loss from G"""
@@ -231,93 +231,83 @@ class GAN(object):
         # `clip_grad_norm` helps prevent the exploding gradient problem.
         torch.nn.utils.clip_grad_norm_(self.netG.parameters(), args.clip)
         self.optimG.step()
-
         return real_w_src, w_src, s_src, a_src, losses, txt_pad_mask
 
-
-    def trainDS(self, batch):
+    def trainDS(self, s_src, w_src, label, pad_mask):
         self.netDS.train()
         args = self.args
-        s_src, w_src, label, pad_mask = batch  # (batch_size, seq_len), data.step += 1
-        s_src = s_src.to(self.device)  # (batch_size,)
-        w_src = w_src.to(self.device)  # (seq_len, batch_size)
-        label = label.to(self.device)
-        pad_mask = pad_mask.to(self.device)
         self.optimDS.zero_grad()
         pred = self.netDS(w_src, s_src, pad_mask) 
         loss = self.criterionD(pred, label)
         loss.backward()
-
-        # `clip_grad_norm` helps prevent the exploding gradient problem.
         torch.nn.utils.clip_grad_norm_(self.netDS.parameters(), args.clip)
         self.optimDS.step()
         return loss.item()
 
-    def trainDA(self, batch):
+    def trainDA(self, a_src, w_src, label, pad_mask):
         self.netDA.train()
         args = self.args
-        a_src, w_src, label, pad_mask = batch  # (batch_size, seq_len), data.step += 1
-        a_src = a_src.to(self.device)  # (batch_size,)
-        w_src = w_src.to(self.device)  # (seq_len, batch_size)
-        label = label.to(self.device)
-        pad_mask = pad_mask.to(self.device)
         self.optimDA.zero_grad()
         pred = self.netDA(w_src, a_src, pad_mask)  # (batch_size, emsize)
         loss = self.criterionD(pred, label)
         loss.backward()
-
-        # `clip_grad_norm` helps prevent the exploding gradient problem.
         torch.nn.utils.clip_grad_norm_(self.netDA.parameters(), args.clip)
         self.optimDA.step()
         return loss.item()
 
     def train(self, data):
         Closs = Tloss = GSloss = GAloss = Gloss = DSloss = DAloss = tot_sample = 0
-        batchD = []  # store the middle result
+        batches = []  # store the middle result
         while True:
-            batchG = data.next_batch()  # (user, item, rating, seq, aspect, senti)
-            batch_size = batchG[0].size(0)
+            batch = data.next_batch()  # (user, item, rating, seq, aspect, senti)
+            batch_size = batch[0].size(0)
             tot_sample += batch_size
 
             label_real = torch.tensor([1.]*batch_size).to(self.device)
             label_fake = torch.tensor([0.]*batch_size).to(self.device)
-            labelD = torch.cat([label_real, label_fake])
+            labelD = torch.cat([label_real, label_fake]).to(self.cpu)
+            batches.append([batch, labelD])
 
-            real_w_src, fake_w_src, s_src, a_src, losses, txt_pad_mask_G = self.trainG(batchG, label_real)
+            _, _, _, _, losses, _ = self.trainG(batch, label_real)
             c_loss, t_loss, gs_loss, ga_loss, g_loss = losses  # context, text, sentiment, aspect, generator
             Closs += batch_size * c_loss; Tloss += batch_size * t_loss
             GSloss += batch_size * gs_loss; GAloss += batch_size * ga_loss
             Gloss += batch_size * g_loss
 
-            # w_src = torch.cat([real_w_src, fake_w_src], dim=1).to(self.cpu)
-            real_w_src = real_w_src.to(self.cpu)
-            s_src = s_src.to(self.cpu); a_src = a_src.to(self.cpu)
-            txt_pad_mask_G = txt_pad_mask_G.to(self.cpu)
-            txt_pad_mask_D = torch.cat([txt_pad_mask_G, txt_pad_mask_G])
-            labelD = labelD.to(self.cpu)
-            batchDS = [torch.cat([s_src, s_src]), real_w_src, labelD, txt_pad_mask_D]
-            batchDA = [torch.cat([a_src, a_src]), real_w_src, labelD, txt_pad_mask_D]
-            batchD.append([batchDS, batchDA])
-
             if data.step % self.args.log_interval != 0 and data.step != data.total_step:
                 continue  # only update discriminator after `log_interval` steps
             else:
                 print(now_time()+'Training:')
-                print(f"Generator: context ppl {Closs/tot_sample:4.4f} | text ppl {Tloss/tot_sample:4.4f} | " + \
+                print(f"Generator: context ppl {math.exp(Closs/tot_sample):4.4f} | text ppl {math.exp(Tloss/tot_sample):4.4f} | " + \
                       f"aspect loss {GAloss/tot_sample:4.4f} | sentiment loss {GSloss/tot_sample:4.4f} | " + \
                       f"loss {Gloss/tot_sample:4.4f} | {data.step:5d}/{data.total_step:5d} batches")
                 Closs = Tloss = GSloss = GAloss = Gloss = 0
 
                 # train discriminator for these batches
-                for batchDS, batchDA in batchD:
+                for batch, labelD in batches:
                     """fake data from G"""
-                    fake_w_src = 
-                    ds_loss = self.trainDS(batchDS)
-                    da_loss = self.trainDA(batchDA)
+                    user, item, _, seq, aspect, senti = [i.to(self.device) for i in batch]
+                    s_src = self.senti_embeddings(senti)  # (batch_size, emsize)
+                    a_src = self.aspect_embeddings(aspect)
+                    s_src = torch.cat([s_src, s_src]); a_src = torch.cat([a_src, a_src])
+                    text = seq.t()[:-1]  # (tgt_len, batch_size)
+
+                    log_word_prob, _, txt_pad_mask, real_w_src = self.netG(user, item, senti, aspect, text) 
+                    txt_pad_mask_D = torch.cat([txt_pad_mask, txt_pad_mask])
+                    word_prob = log_word_prob.exp()
+                    fake_w_src = word_prob.matmul(self.word_embeddings.weight)
+                    w_src = torch.cat([real_w_src, fake_w_src], dim=1)
+                    ds_loss = self.trainDS(s_src, w_src, labelD.to(self.device), txt_pad_mask_D)
+                    # get fake text second time to avoid setting `retain_graph=True`
+                    log_word_prob, _, txt_pad_mask, real_w_src = self.netG(user, item, senti, aspect, text) 
+                    word_prob = log_word_prob.exp()
+                    fake_w_src = word_prob.matmul(self.word_embeddings.weight)
+                    w_src = torch.cat([real_w_src, fake_w_src], dim=1)
+                    da_loss = self.trainDA(a_src, w_src, labelD.to(self.device), txt_pad_mask_D)
                     DSloss += batch_size * ds_loss; DAloss += batch_size * da_loss
                 print(now_time()+'Training:')
                 print(f"Discriminator: aspect loss {DAloss/tot_sample:4.4f} | sentiment loss {DSloss/tot_sample:4.4f}")
-                batchD = []
+                batches = []
                 DSloss = DAloss = tot_sample = 0
             if data.step == data.total_step:
                 break
@@ -355,8 +345,8 @@ class GAN(object):
             s_src = self.senti_embeddings(senti)  # (batch_size, emsize)
             a_src = self.aspect_embeddings(aspect)
             txt_pad_mask_D = torch.cat([txt_pad_mask_G, txt_pad_mask_G])
-            pred_s = self.netDS(fake_w_src, s_src, txt_pad_mask_D)
-            pred_a = self.netDA(fake_w_src, a_src, txt_pad_mask_D)
+            pred_s = self.netDS(fake_w_src, s_src, txt_pad_mask_G)
+            pred_a = self.netDA(fake_w_src, a_src, txt_pad_mask_G)
 
             c_loss = self.criterionG(context_dis.view(-1, self.ntoken), seq[1:-1].reshape((-1,)))
             t_loss = self.criterionG(log_word_prob.view(-1, self.ntoken), seq[1:].reshape((-1,)))
@@ -377,7 +367,7 @@ class GAN(object):
 
             if data.step % args.log_interval == 0 or data.step == data.total_step:
                 print('\n' + now_time() + f'Evaluating on {msg}: ')
-                print(f"Generator: context ppl {Closs/tot_sample:4.4f} | text ppl {Tloss/tot_sample:4.4f} | " + \
+                print(f"Generator: context ppl {math.exp(Closs/tot_sample):4.4f} | text ppl {math.exp(Tloss/tot_sample):4.4f} | " + \
                       f"aspect loss {GAloss/tot_sample:4.4f} | sentiment loss {GSloss/tot_sample:4.4f} | " + \
                       f"loss {Gloss/tot_sample:4.4f} | {data.step:5d}/{data.total_step:5d} batches")
                 Closs = Tloss = GSloss = GAloss = Gloss = 0

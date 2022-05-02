@@ -225,13 +225,14 @@ class GAN(object):
         s_loss = self.criterionD(pred_s, label_real)
         a_loss = self.criterionD(pred_a, label_real)
         g_loss = args.text_reg*t_loss + args.context_reg*c_loss + args.sentiment_reg*s_loss + args.aspect_reg*a_loss
-        losses = [l.item() for l in (c_loss, t_loss, s_loss, a_loss, g_loss)]
+        # losses = [l.item() for l in (c_loss, t_loss, s_loss, a_loss, g_loss)]
         g_loss.backward(retain_graph=True)
 
         # `clip_grad_norm` helps prevent the exploding gradient problem.
         torch.nn.utils.clip_grad_norm_(self.netG.parameters(), args.clip)
         self.optimG.step()
-        return real_w_src, w_src, s_src, a_src, losses, txt_pad_mask
+        # return real_w_src, w_src, s_src, a_src, losses, txt_pad_mask
+        return c_loss.item(), t_loss.item(), s_loss.item(), a_loss.item(), g_loss.item()
 
     def trainDS(self, s_src, w_src, label, pad_mask):
         self.netDS.train()
@@ -268,8 +269,8 @@ class GAN(object):
             labelD = torch.cat([label_real, label_fake]).to(self.cpu)
             batches.append([batch, labelD])
 
-            _, _, _, _, losses, _ = self.trainG(batch, label_real)
-            c_loss, t_loss, gs_loss, ga_loss, g_loss = losses  # context, text, sentiment, aspect, generator
+            c_loss, t_loss, gs_loss, ga_loss, g_loss = self.trainG(batch, label_real)
+            # c_loss, t_loss, gs_loss, ga_loss, g_loss = losses  # context, text, sentiment, aspect, generator
             Closs += batch_size * c_loss; Tloss += batch_size * t_loss
             GSloss += batch_size * gs_loss; GAloss += batch_size * ga_loss
             Gloss += batch_size * g_loss
@@ -394,7 +395,7 @@ class GAN(object):
             start_idx = text.size(0)
             for i in range(args.words):
                 # produce a word at each step
-                log_word_prob, _, _ = self.netG(user, item, senti, aspect, text, False, False)  # (batch_size, ntoken)
+                log_word_prob, _, _, _ = self.netG(user, item, senti, aspect, text, False, False)  # (batch_size, ntoken)
                 word_prob = log_word_prob.exp()  # (batch_size, ntoken)
                 word_idx = torch.argmax(word_prob, dim=1)  # (batch_size,), pick the one with the largest probability
                 text = torch.cat([text, word_idx.unsqueeze(0)], 0)  # (len++, batch_size)

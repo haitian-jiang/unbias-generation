@@ -1,11 +1,7 @@
 __pycache__/
 out-*/
 *.log
-logs
 .DS_Store
 .ipynb_checkpoints/
 ABSA/
 *.pt
-._*
-.vscode
-results

@@ -5,3 +5,4 @@ out-*/
 .ipynb_checkpoints/
 ABSA/
 *.pt
+save/GEST/generated-train.txt
